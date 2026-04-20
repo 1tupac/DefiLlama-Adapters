@@ -1,4 +1,7 @@
-const { getCuratorExport } = require("../helper/curators");
+const { getCuratorExport, kaminoLendVaultTvl } = require("../helper/curators");
+const axios = require('axios');
+// const aeraV3 = require('../aera-v3')  // excluded till we find a way to exclude deposits from aera-v3 into other gauntlet curated vaults
+const coreAssets = require('../helper/coreAssets.json')
 
 const configs = {
   methodology: 'Counts all assets that are deposited in all vaults curated by Gauntlet.',
@@ -6,6 +9,8 @@ const configs = {
     ethereum: {
       morphoVaultOwners: [
         '0xC684c6587712e5E7BDf9fD64415F23Bd2b05fAec',
+        '0xd79766D2FeC43886e995EA415a2Bf406280B2e2C',
+
       ],
       aera: [
         '0x7c8406384f7a5c147a6add16407803be146147e4',
@@ -83,8 +88,7 @@ const configs = {
         '0xdb223128a4524ce733c575421267dc56992c796d',
         '0x70f6fd99a43fce03648b20d44b9f0cd2b14eea68',
         '0x94bca6d21907b8275daa3803fe432cd916c4fdd2',
-        '0x94bca6d21907b8275daa3803fe432cd916c4fdd2',
-      ]
+      ],
     },
     polygon: {
       morphoVaultOwners: [
@@ -108,7 +112,177 @@ const configs = {
         '0x5D8C96b76A342c640d9605187daB780f8365F69f',
       ],
     },
+    arbitrum: {
+      morphoVaultOwners: [
+        '0x9E33faAE38ff641094fa68c65c2cE600b3410585',
+        '0x5a4E19842e09000a582c20A4f524C26Fb48Dd4D0',
+        '0xF9D8B7e7981986746c4DE236CC72F1a26AFb5851',
+      ],
+    },
+    optimism: {
+      morphoVaultOwners: [
+        '0x9E33faAE38ff641094fa68c65c2cE600b3410585',
+        '0x5a4E19842e09000a582c20A4f524C26Fb48Dd4D0',
+      ],
+    },
   }
 }
 
-module.exports = getCuratorExport(configs)
+// --- Drift Solana TVL logic ---
+const ADDRESSES = require('../helper/coreAssets.json')
+const { getMultipleAccounts, getProvider, } = require('../helper/solana')
+const { Program, BN } = require("@project-serum/anchor")
+const { PublicKey } = require("@solana/web3.js")
+
+const TOKEN_INFO = {
+  USDC: {
+    mint: ADDRESSES.solana.USDC,
+    decimals: 6,
+  },
+  SOL: {
+    mint: ADDRESSES.solana.SOL,
+    decimals: 9,
+  },
+  jitoSOL: {
+    mint: ADDRESSES.solana.JitoSOL,
+    decimals: 9,
+  },
+  JTO: {
+    mint: 'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL',
+    decimals: 9,
+  },
+  WIF: {
+    mint: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+    decimals: 6,
+  },
+  DRIFT: {
+    mint: 'DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7',
+    decimals: 6,
+  },
+  INF: {
+    mint: '5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm',
+    decimals: 9,
+  },
+  dSOL: {
+    mint: ADDRESSES.solana.dSOL,
+    decimals: 9,
+  },
+  JLP: {
+    mint: '27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4',
+    decimals: 6,
+  },
+  cbBTC: {
+    mint: 'cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij',
+    decimals: 8,
+  },
+  USDS: {
+    mint: 'USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA',
+    decimals: 6,
+  },
+  BONK: {
+    mint: ADDRESSES.solana.BONK,
+    decimals: 5,
+  },
+  dfdvSOL: {
+    mint: 'sctmB7GPi5L2Q5G9tUSzXvhZ4YiDMEGcRov9KfArQpx',
+    decimals: 9,
+  },
+  wETH: {
+    mint: 'FeGn77dhg1KXRRFeSwwMiykZnZPw5JXW6naf2aQgZDQf',
+    decimals: 8,
+  },
+}
+
+function getTokenInfo(marketIndex) {
+  switch (marketIndex) {
+    case 0: return TOKEN_INFO.USDC
+    case 1: return TOKEN_INFO.SOL
+    case 6: return TOKEN_INFO.jitoSOL
+    case 9: return TOKEN_INFO.JTO
+    case 10: return TOKEN_INFO.WIF
+    case 15: return TOKEN_INFO.DRIFT
+    case 16: return TOKEN_INFO.INF
+    case 17: return TOKEN_INFO.dSOL
+    case 19: return TOKEN_INFO.JLP
+    case 27: return TOKEN_INFO.cbBTC
+    case 28: return TOKEN_INFO.USDS
+    case 32: return TOKEN_INFO.BONK
+    case 52: return TOKEN_INFO.dfdvSOL
+    case 4: return TOKEN_INFO.wETH // double check if this is correct
+    default: return undefined
+  }
+}
+
+const VAULT_USER_ACCOUNTS = [
+  'Fu8AWYqw7bPZJAxumXJHs62BQZTMcsUkgGdwoh4v3js2', // hJLP 1x (USDC)
+  '3fFkCDe3DU3qVK8FD5fBYumK1bjGKA7uTvVPP53j3ydA', // hJLP 2x (USDC)
+  'DMbboHpxpJjTic3CMVRCiJFYKaEEz6izMgE9vB6GBSxv', // Gauntlet Basis Alpha (USDC)
+  '7Lka2kKagwTvTWNas2UtPaFiwpgs7r9BJtUEzQBB4DxT', // hJLP 1x (JLP)
+  '4UF8DgbH8hGmtfFhV369bkwMyRJbJDGN3UtYCZoeKqN3', // SOL Plus
+  '3u3biLVaLsbeQaXKq3Dt7c4di5Un2rqza4QXnFRmVZ7t', // cbBTC Plus
+  'EC2w198qubUWA2Xf73hz2d7vFKNaQc1XN7SYYqXbfLKQ', // dSOL Plus
+  '4Kayz1HkWJiEcYQgyQkXDC8Y6CeCoV5MYFXg3KwaL9ii', // jitoSOL Plus
+  '68oTjvenFJfrr2iYPtBTRiFyXA8N2pXdHDP82YvuhLaC', // DRIFT Plus
+  'GYxrPXFhCQamBxUc4wMYHnB235Aei7GZsjFCfZgfYJ6b', // Carrot hJLP 
+  'FbbcWcg5FfiPdBhkxuBAeoFCyVN2zzSvNPyM7bRiSKAL', // JTO Plus
+  'BrXMRthT599b2mck5bXig6CaHR83kv3vA2dSMC17nv3H', // dfdvSOL Plus
+  '5pJRZ2pcRfKLpsR4fTigN87jBJ93F4KGp3kxb38GNWoN', // wETH Plus
+]
+
+// --- Kamino Lend Vault Layer ---
+const GAUNTLET_ADMIN = new PublicKey('JC8sPweHaHr1kWzAvykaAmLsWtSWhi3M4NnyYGRdxgkt')
+
+
+async function tvl(api) {
+  // Drift vaults disabled - drift was hacked
+  // const accounts = await getMultipleAccounts(VAULT_USER_ACCOUNTS)
+  // const idl = require("../knightrade/drift_idl.json")
+  // const programId = new PublicKey('dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH')
+  // const provider = getProvider()
+  // const program = new Program(idl, programId, provider)
+  // ... drift position processing removed ...
+
+  // Kamino Lend vaults
+  await kaminoLendVaultTvl(api, GAUNTLET_ADMIN)
+}
+
+async function megavaultTvl(api) {
+  const url = "https://indexer.dydx.trade/v4/vault/v1/megavault/historicalPnl?resolution=hour";
+  const { data } = await axios.get(url, { headers: { 'Accept': 'application/json' } });
+  const pnlArr = data.megavaultPnl;
+  if (!pnlArr || !pnlArr.length) return;
+  const currentTvl = Number(pnlArr[pnlArr.length - 1].equity);
+
+  // Report as USD Coin using coingecko identifier
+  api.add(ADDRESSES.ethereum.USDC, (currentTvl * 1e6).toFixed(0));
+}
+
+async function combinedEthereumTvl(api) {
+  const curatorExport = getCuratorExport(configs);
+  if (curatorExport.ethereum?.tvl) await curatorExport.ethereum.tvl(api);
+  await megavaultTvl(api);
+  // await aeraV3.ethereum.tvl(api);
+  
+  // remove bad debt from Resolv hack
+  // Gauntlet USDC Core vault on Morpho 0xE08145eb0132a219aad1B78a85baD8666a97CB94
+  if (api.timestamp >= 1774224000) api.add(coreAssets.ethereum.USDC, -4087518979934);
+}
+
+async function combinedBaseTvl(api) {
+  const curatorExport = getCuratorExport(configs);
+  if (curatorExport.base?.tvl) await curatorExport.base.tvl(api);
+  // await aeraV3.base.tvl(api);
+}
+
+module.exports = {
+  ...getCuratorExport(configs),
+  solana: { tvl },
+  ethereum: { tvl: combinedEthereumTvl },
+  base: { tvl: combinedBaseTvl },
+  timetravel: false,
+  hallmarks: [
+    ["2026-03-22", "Resolve USR hack"],
+    ["2026-04-01", "USR losses are realized"],
+  ],
+  methodology: configs.methodology,
+}
